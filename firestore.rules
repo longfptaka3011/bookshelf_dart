@@ -1,0 +1,68 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /books/{bookId} {
+      // Helper functions for authentication check
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      
+      // Validation helper: string must be non-empty, not spaces only, and within length limit
+      function isNonEmptyString(val, maxLen) {
+        return val is string && val.size() > 0 && val.size() <= maxLen && !val.matches('^\\s+$');
+      }
+      
+      // Allowed genre values
+      function isValidGenre(genre) {
+        return genre in ['Fiction', 'Non-Fiction', 'Academic', 'Other'];
+      }
+      
+      // Allowed status values
+      function isValidStatus(status) {
+        return status in ['To Read', 'Reading', 'Finished'];
+      }
+      
+      // Rating validation: optional, but if present must be integer 0 to 5
+      function isValidRating(rating) {
+        return rating == null || (rating is int && rating >= 0 && rating <= 5);
+      }
+      
+      // Notes validation: optional, but if present must be string <= 300 characters
+      function isValidNotes(notes) {
+        return notes == null || (notes is string && notes.size() <= 300);
+      }
+      
+      // Comprehensive validation of book fields
+      function isValidBookData(data) {
+        return data.userId == request.auth.uid
+          && isNonEmptyString(data.title, 100)
+          && isNonEmptyString(data.author, 60)
+          && isValidGenre(data.genre)
+          && isValidStatus(data.status)
+          && (!('rating' in data) || isValidRating(data.rating))
+          && (!('notes' in data) || isValidNotes(data.notes))
+          && (!('favorite' in data) || data.favorite is bool);
+      }
+
+      // Read rule: Only authenticated users can read their own books (or query filtered by userId)
+      allow read: if isSignedIn() && (resource == null || resource.data.userId == request.auth.uid);
+
+      // Create rule: Authenticated user, valid schema, owns the book, and cannot overwrite an existing doc
+      allow create: if isSignedIn() 
+                    && request.resource.data.userId == request.auth.uid
+                    && isValidBookData(request.resource.data)
+                    && !exists(/databases/$(database)/documents/books/$(bookId));
+
+      // Update rule: Authenticated user, owns the original book, cannot reassign userId, valid schema
+      allow update: if isSignedIn() 
+                    && resource.data.userId == request.auth.uid 
+                    && request.resource.data.userId == request.auth.uid
+                    && isValidBookData(request.resource.data);
+
+      // Delete rule: Only the owner can delete their book
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+    
+  }
+}
